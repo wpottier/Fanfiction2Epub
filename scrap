@@ -1,0 +1,233 @@
+#!/usr/bin/env node
+
+var scrap = require('scrap')
+    , fs = require('fs')
+    , async = require('async')
+    , tidy = require('htmltidy').tidy
+    , zipper = require('zipper').Zipper;
+    ;
+
+var getAllFilesFromFolder = function(dir, removePart) {
+
+    var results = [];
+
+    fs.readdirSync(dir).forEach(function(file) {
+
+        file = dir+'/'+file;
+        var stat = fs.statSync(file);
+
+        if (stat && stat.isDirectory()) {
+            results = results.concat(getAllFilesFromFolder(file, removePart))
+        } else results.push(file.replace(removePart, ''));
+
+    });
+
+    return results;
+
+};
+
+if(process.argv.length < 3) {
+    throw new Error('Missing fanfiction url');
+}
+
+var url = process.argv[2];
+
+console.log('Url to scrap', url);
+
+var extract = url.match(/https:\/\/www\.fanfiction\.net\/s\/(\d+)\/\d+\/(.*)/);
+
+if (extract.length < 3) {
+    throw new Error('Not a fanfiction.net url');
+}
+
+scrap(url, function (err, $) {
+    if (err) {
+        console.log(err);
+        return;
+    }
+
+    var fanfictionTitle = $('#profile_top .xcontrast_txt').first().text().trim();
+
+    var sourceChapters = $('#chap_select').first().find('option');
+
+    var baseBuildPath = './export/' + extract[2];
+    var metaInfBuildPath = baseBuildPath + '/META-INF';
+    var oebpsBuildPath = baseBuildPath + '/OEBPS';
+
+    if (!fs.existsSync(baseBuildPath)) {
+        fs.mkdirSync(baseBuildPath);
+    }
+
+    if (!fs.existsSync(metaInfBuildPath)) {
+        fs.mkdirSync(metaInfBuildPath);
+    }
+
+    if (!fs.existsSync(oebpsBuildPath)) {
+        fs.mkdirSync(oebpsBuildPath);
+    }
+
+    if (!fs.existsSync(oebpsBuildPath + '/Text')) {
+        fs.mkdirSync(oebpsBuildPath + '/Text');
+    }
+
+    // Write manifest
+    fs.writeFileSync(baseBuildPath + '/mimetype', 'application/epub+zip');
+
+    // Write xml container
+    var containerXmlLines = [
+        '<?xml version="1.0"?>',
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">',
+        '   <rootfiles>',
+        '       <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>',
+        '   </rootfiles>',
+        '</container>'
+    ];
+    fs.writeFileSync(metaInfBuildPath + '/container.xml', containerXmlLines.join("\n"));
+
+    var dateNow = new Date();
+    var datePublished = new Date();
+    datePublished.setTime(parseInt($('.xgray > span:nth-child(4)').attr('data-xutime')) * 1000);
+
+    // Build content.opf file
+    var contentOpfLines = [
+        '<?xml version="1.0" encoding="utf-8" standalone="yes"?>',
+        '<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0" xmlns:opf="http://www.idpf.org/2007/opf">',
+        '    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">',
+        '        <dc:identifier id="BookId" opf:scheme="Fanfiction.net">' + extract[1] + '</dc:identifier>',
+        '        <dc:title>' + fanfictionTitle + '</dc:title>',
+        '        <dc:language>fr</dc:language>',
+        '        <dc:publisher>fanfiction.net</dc:publisher>',
+        '        <dc:creator opf:role="aut">' + $('a.xcontrast_txt:nth-child(5)').text().trim() + '</dc:creator>',
+        '        <dc:type>text</dc:type>',
+        '        <dc:date opf:event="creation">' + dateNow.getFullYear() + '-' + (dateNow.getMonth() + 1) + '-' + dateNow.getDate() + '</dc:date>',
+        '        <dc:date opf:event="publication">' + datePublished.getFullYear() + '-' + (datePublished.getMonth() + 1) + '-' + datePublished.getDate() + '</dc:date>',
+        '        <dc:description>' + $('div.xcontrast_txt:nth-child(8)').text().trim() + '</dc:description>',
+        '    </metadata>',
+        '    <manifest>',
+        '        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        '        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+    ];
+
+    var spineLines = [
+    ];
+
+    // Create toc file
+    var tocLines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">',
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">',
+        '    <head>',
+        '        <meta name="dtb:uid" content="' + exports[1] + '-' + (Date.now()) + '" />',
+        '        <meta name="dtb:depth" content="0" />',
+        '        <meta name="dtb:totalPageCount" content="0" />',
+        '        <meta name="dtb:maxPageNumber" content="0" />',
+        '    </head>',
+        '    <docTitle>',
+        '        <text>' + fanfictionTitle + '</text>',
+        '    </docTitle>',
+        '    <navMap>'
+    ];
+
+
+    async.eachSeries(sourceChapters, function(item, end) {
+        if (item.children) {
+            contentOpfLines.push('        <item href="Text/Chapter_' + item.attribs.value + '.xhtml" id="Chapter_' + item.attribs.value + '.xhtml" media-type="application/xhtml+xml" />');
+            spineLines.push('        <itemref idref="Chapter_' + item.attribs.value + '.xhtml" />');
+
+            tocLines.push('        <navPoint class="h1" id="ch-' + item.attribs.value + '">');
+            tocLines.push('            <navLabel>');
+            tocLines.push('                <text>' + item.children[0].data + '</text>');
+            tocLines.push('            </navLabel>');
+            tocLines.push('            <content src="Text/Chapter_' + item.attribs.value + '.xhtml"/>');
+            tocLines.push('        </navPoint>');
+
+            var chapterUrl = [
+                'https://www.fanfiction.net/s/',
+                extract[1],
+                '/',
+                item.attribs.value,
+                '/',
+                extract[2]
+            ];
+
+            console.log(chapterUrl.join(''));
+
+            scrap(chapterUrl.join(''), function (err, $) {
+
+                var html = [
+                    '<?xml version="1.0" encoding="utf-8" standalone="no"?>',
+                    '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">',
+                    '<html xmlns="http://www.w3.org/1999/xhtml">',
+                    '    <head>',
+                    '       <title>' + fanfictionTitle + ' - ' + item.children[0].data + '</title>',
+                    '    </head>',
+                    '    <body>',
+                    '        <div id="main-content">',
+                    $('#storytext').html(),
+                    '        </div>',
+                    '    </body>',
+                    '</html>'
+                ];
+
+
+                tidy(html.join("\n"), {
+                    doctype: 'strict',
+                    hideComments: true, //  multi word options can use a hyphen or "camel case"
+                    indent: true
+                }, function(err, cleanHtml) {
+                    fs.writeFileSync(oebpsBuildPath + '/Text/Chapter_' + item.attribs.value + '.xhtml', cleanHtml);
+                    end();
+                });
+            });
+        }
+    }, function() {
+        // End function
+
+        // Content.opf
+        contentOpfLines.push('    </manifest>');
+        contentOpfLines.push('    <spine toc="ncx">');
+        contentOpfLines.push(spineLines.join("\n"));
+        contentOpfLines.push('    </spine>');
+        contentOpfLines.push('</package>');
+
+        fs.writeFileSync(oebpsBuildPath + '/content.opf', contentOpfLines.join("\n"));
+
+        // toc.ncx
+        tocLines.push('    </navMap>');
+        tocLines.push('</ncx>');
+        fs.writeFileSync(oebpsBuildPath + '/toc.ncx', tocLines.join("\n"));
+
+
+        console.log('Create zip file...');
+
+        var epubOutputFile = './export/' + extract[2] + '.epub';
+
+        if (fs.existsSync(epubOutputFile)) {
+            fs.unlinkSync(epubOutputFile);
+        }
+
+        fs.writeFileSync(epubOutputFile, fs.readFileSync('./mimetype.zip'));
+
+
+        var zipfile = new zipper(epubOutputFile);
+
+        async.eachSeries(getAllFilesFromFolder(oebpsBuildPath, baseBuildPath), function(item, end) {
+            zipfile.addFile(baseBuildPath + item, item.substr(1), function (err) {
+                if (err) throw err;
+
+                end();
+            });
+        }, function() {
+            async.eachSeries(getAllFilesFromFolder(metaInfBuildPath, baseBuildPath), function(item, end) {
+                zipfile.addFile(baseBuildPath + item, item.substr(1), function (err) {
+                    if (err) throw err;
+
+                    end();
+                });
+            }, function() {
+                console.log('Done !');
+                console.log('Epub : ', epubOutputFile);
+            });
+        });
+    });
+});

@@ -1,0 +1,16 @@
+{
+  "name": "Fanfiction2Epub",
+  "description": "Fanfiction2Epub",
+  "author": "William Potter <developer@william-pottier.fr>",
+  "version": "0.0.1",
+  "dependencies": {
+    "adm-zip": "^0.4.4",
+    "async": "^0.9.0",
+    "commander": "^2.3.0",
+    "htmltidy": "0.0.6",
+    "scrap": "^0.1.0",
+    "underscore": "^1.6.0",
+    "zipper": "^0.3.0"
+  },
+  "engine": "node >= 0.10.26"
+}
